@@ -1,0 +1,79 @@
+syntax = "proto3";
+
+package dfs_service;
+
+service DFSService {
+    rpc StoreFile(stream StoreRequest) returns (StoreResponse) {}
+    rpc FetchFile(FetchRequest) returns (stream FetchResponse) {}
+    rpc ListFile(ListRequest) returns (stream ListResponse) {}
+    rpc StatFile(StatRequest) returns (StatResponse) {}
+    rpc WriteLock(WriteLockRequest) returns (WriteLockResponse) {}
+    rpc CallbackList(CallbackListRequest) returns (CallbackListResponse) {}
+    rpc DeleteFile(DeleteRequest) returns (DeleteResponse) {}
+}
+
+message StoreRequest {
+    string filename = 1;
+    bytes  chunk    = 2;
+    string clientid = 3;
+    uint32 crc      = 4;
+}
+
+message StoreResponse {}
+
+message FetchRequest {
+    string filename = 1;
+    string clientid = 2;
+    uint32 crc      = 3;
+}
+
+message FetchResponse {
+    bytes chunk = 1;
+    int64 mtime = 3;
+}
+
+message DeleteRequest {
+    string filename = 1;
+    string clientid = 2;
+}
+
+message DeleteResponse {}
+
+message ListRequest {}
+
+message ListResponse {
+    string filename = 1;
+    int64  mtime    = 2;
+}
+
+message StatRequest {
+    string filename = 1;
+}
+
+message StatResponse {
+    int64 size  = 1;
+    int64 mtime = 2;
+}
+
+message WriteLockRequest {
+    string filename = 1;
+    string clientid = 2;
+}
+
+message WriteLockResponse {}
+
+message CallbackListRequest {
+    string name     = 1;
+    string clientid = 2;
+}
+
+message CallbackListResponse {
+    int64 filecount = 1;
+    message Stats {
+        string filename = 1;
+        int64  size     = 2;
+        int64  mtime    = 3;
+        uint32 crc      = 4;
+    }
+    repeated Stats stat = 2;
+}
