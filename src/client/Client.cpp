@@ -1,26 +1,20 @@
-// DFSClient: inotify watcher, async thread management, CLI command routing.
+// Client: inotify watcher, async thread management, CLI command routing.
 #include <map>
 #include <string>
 #include <thread>
-#include <fstream>
 #include <errno.h>
 #include <iostream>
 #include <sys/inotify.h>
 #include <grpcpp/grpcpp.h>
 
-#include "src/common/Log.h"
-#include "src/common/Path.h"
-#include "src/common/Config.h"
-#include "src/common/Inotify.h"
-#include "src/client/Client.h"
-#include "src/client/ClientBase.h"
-#include "src/client/ClientNode.h"
+#include "src/common/Utils.hpp"
+#include "src/client/Client.hpp"
 
-DFSClient::DFSClient() {}
+Client::Client() {}
 
-DFSClient::~DFSClient() noexcept { this->Unmount(); }
+Client::~Client() noexcept { this->Unmount(); }
 
-void DFSClient::ProcessCommand(const std::string& command, const std::string& filename) {
+void Client::ProcessCommand(const std::string& command, const std::string& filename) {
     if (command == "mount") {
         Mount(this->mount_path);
     } else if (command == "fetch") {
@@ -39,70 +33,64 @@ void DFSClient::ProcessCommand(const std::string& command, const std::string& fi
     }
 }
 
-void DFSClient::InitializeClientNode(const std::string& server_address) {
-    this->client_node.CreateStub(grpc::CreateChannel(server_address, grpc::InsecureChannelCredentials()));
+void Client::InitializeClientNode(const std::string& server_address) {
+    client_node.CreateStub(grpc::CreateChannel(server_address, grpc::InsecureChannelCredentials()));
 }
 
-void DFSClient::SetMountPath(const std::string& path) {
+void Client::SetMountPath(const std::string& path) {
     this->mount_path = dfs_clean_path(path);
-    this->client_node.SetMountPath(this->mount_path);
+    client_node.SetMountPath(this->mount_path);
 }
 
-void DFSClient::SetDeadlineTimeout(int deadline) {
+void Client::SetDeadlineTimeout(int deadline) {
     this->deadline_timeout = deadline;
-    this->client_node.SetDeadlineTimeout(deadline);
+    client_node.SetDeadlineTimeout(deadline);
 }
 
-void DFSClient::Mount(const std::string& filepath) {
-    this->mount_path = filepath;
-    if (this->mount_path.back() != '/') {
-        this->mount_path.append("/");
-    }
-
+void Client::Mount(const std::string& filepath) {
     dfs_log(LL_SYSINFO) << "Mounting on " << this->mount_path;
-
     std::vector<std::thread> threads;
-    uint event_flags = IN_CREATE | IN_MODIFY | IN_DELETE;
 
-    const FileDescriptor fd = inotify_init();
-    if (fd < 0) {
+    const FileDescriptor inotify_descriptor = inotify_init();
+    if (inotify_descriptor < 0) {
         std::cerr << "inotify_init failed: " << strerror(errno) << std::endl;
         exit(-1);
     }
+    uint event_flags = IN_CREATE | IN_MODIFY | IN_DELETE;
+    const WatchDescriptor wd = inotify_add_watch(inotify_descriptor, filepath.c_str(), event_flags | IN_ONLYDIR);
+    if (wd < 0) {
+        std::cerr << "inotify_add_watch failed: " << strerror(errno) << std::endl;
+        exit(-1);
+    }
 
-    const WatchDescriptor wd = inotify_add_watch(fd, filepath.c_str(), event_flags | IN_ONLYDIR);
-
-    std::thread thread_watcher(DFSClient::InotifyWatcher, DFSClient::InotifyEventCallback,
-                               event_flags, fd, &this->client_node);
-    NotifyStruct n_event = {fd, wd, event_flags, &thread_watcher, DFSClient::InotifyEventCallback};
-    events.emplace_back(n_event);
+    // Need to pass 'this' so InotifyWatcher knows which Client obj called it to access correct client_node
+    std::thread thread_watcher(&Client::InotifyWatcher, this, event_flags, inotify_descriptor);
+    events.emplace_back(NotifyStruct{inotify_descriptor, wd, event_flags, &thread_watcher});
     threads.push_back(std::move(thread_watcher));
 
-    thread_async = std::thread(&DFSClientNode::HandleCallbackList, &this->client_node);
+    thread_async = std::thread(&ClientNode::HandleCallbackList, &client_node);
     threads.push_back(std::move(thread_async));
-
-    this->client_node.InitCallbackList();
+    client_node.InitCallbackList();
 
     for (std::thread& t : threads) {
         if (t.joinable()) { t.join(); }
     }
 }
 
-void DFSClient::Unmount() {
+void Client::Unmount() {
     std::vector<FileDescriptor> descriptors;
 
-    this->client_node.Unmount();
+    client_node.Unmount();
     for (NotifyStruct& e : events) {
         if (e.thread->joinable()) { e.thread->detach(); }
         e.thread->~thread();
-        inotify_rm_watch(e.wd, e.fd);
-        descriptors.push_back(e.fd);
+        inotify_rm_watch(e.wd, e.inotify_descriptor);
+        descriptors.push_back(e.inotify_descriptor);
     }
 
     auto tail = std::ranges::unique(descriptors);
-    for (auto it = descriptors.begin(); it != tail.begin(); ++it){
-        FileDescriptor fd = *it;
-        if (close(fd) != 0) {
+    for (auto it = descriptors.begin(); it != tail.begin(); ++it) {
+        if (close(*it) != 0) {
             std::cerr << "Unable to close file descriptor" << std::endl;
         }
     }
@@ -114,32 +102,28 @@ void DFSClient::Unmount() {
     }
 }
 
-void DFSClient::InotifyWatcher(InotifyCallback callback, uint event_type,
-                                FileDescriptor fd, DFSClientBase* node) {
+void Client::InotifyWatcher(uint event_type, FileDescriptor inotify_descriptor) {
     int len;
     std::allocator<char> allocator;
     std::unique_ptr<char> handle(allocator.allocate(DFS_I_BUFFER_SIZE));
     char* events_buffer = handle.get();
 
     while (true) {
-        len = read(fd, events_buffer, DFS_I_BUFFER_SIZE);
+        len = read(inotify_descriptor, events_buffer, DFS_I_BUFFER_SIZE);
         int index = 0;
 
-        node->InotifyWatcherCallback([&]{
+        client_node.Synchronized([&] {
             while (index < len) {
-                inotify_event* event = reinterpret_cast<inotify_event*>(&(events_buffer[index]));
-                EventStruct event_data;
-                event_data.event = event;
-                event_data.instance = node;
-
+                inotify_event* event = reinterpret_cast<inotify_event*>(&events_buffer[index]);
                 if ((event_type & event->mask) && event->name[0] != '.') {
-                    callback(event_type, std::string{node->MountPath() + event->name}, &event_data);
+                    if (event->mask & IN_CREATE || event->mask & IN_MODIFY) {
+                        client_node.Store(event->name);
+                    } else if (event->mask & IN_DELETE) {
+                        client_node.Delete(event->name);
+                    }
                 }
-
-                size_t used = DFS_I_EVENT_SIZE + event->len;
-                index += (used / sizeof(char));
+                index += DFS_I_EVENT_SIZE + event->len;
             }
-
             if (errno == EINTR) {
                 dfs_log(LL_ERROR) << "inotify interrupted";
             }
@@ -147,18 +131,3 @@ void DFSClient::InotifyWatcher(InotifyCallback callback, uint event_type,
     }
 }
 
-void DFSClient::InotifyEventCallback(uint event_type, const std::string& filename, void* data) {
-    std::string basename = filename.substr(filename.find_last_of("/") + 1);
-
-    auto event_data = reinterpret_cast<EventStruct*>(data);
-    inotify_event* event = reinterpret_cast<inotify_event*>(event_data->event);
-    DFSClientBase* node = reinterpret_cast<DFSClientBase*>(event_data->instance);
-
-    if (event->mask & IN_CREATE) {
-        node->Store(basename);
-    } else if (event->mask & IN_MODIFY) {
-        node->Store(basename);
-    } else if (event->mask & IN_DELETE) {
-        node->Delete(basename);
-    }
-}

@@ -1,18 +1,16 @@
-// Abstract client base: gRPC stub, CRC table, and async CallbackList<> template.
-#ifndef CLIENT_BASE_H
-#define CLIENT_BASE_H
+// ClientNode: gRPC stub, CRC table, async callback queue, and all RPC implementations.
+#ifndef CLIENT_NODE_H
+#define CLIENT_NODE_H
 
-#include <string>
-#include <vector>
 #include <map>
-#include <limits.h>
-#include <chrono>
 #include <mutex>
+#include <string>
+#include <limits.h>
 #include <functional>
 
 #include <grpcpp/grpcpp.h>
 
-#include "src/common/Checksum.h"
+#include "src/common/Utils.hpp"
 #include "proto-src/dfs-service.grpc.pb.h"
 
 template<typename ResponseT>
@@ -23,9 +21,8 @@ struct AsyncClientData {
     std::unique_ptr<grpc::ClientAsyncResponseReader<ResponseT>> response_reader;
 };
 
-class DFSClientBase {
-
-protected:
+class ClientNode {
+private:
     int deadline_timeout;
     std::string client_id;
     std::string mount_path;
@@ -33,12 +30,13 @@ protected:
     CRC::Table<std::uint32_t, 32> crc_table;
     std::unique_ptr<dfs_service::DFSService::Stub> service_stub;
     grpc::CompletionQueue completion_queue;
+    std::mutex server_lock;
 
     std::string WrapPath(const std::string& filepath);
 
 public:
-    DFSClientBase();
-    ~DFSClientBase();
+    ClientNode();
+    ~ClientNode() noexcept;
 
     void SetMountPath(const std::string& path);
     void SetDeadlineTimeout(int deadline);
@@ -49,14 +47,16 @@ public:
     const std::string ClientId();
     void CreateStub(std::shared_ptr<grpc::Channel> channel);
 
-    virtual grpc::StatusCode RequestWriteAccess(const std::string& filename) = 0;
-    virtual grpc::StatusCode Store(const std::string& filename) = 0;
-    virtual grpc::StatusCode Fetch(const std::string& filename) = 0;
-    virtual grpc::StatusCode Delete(const std::string& filename) = 0;
-    virtual grpc::StatusCode List(std::map<std::string,int>* file_map = nullptr, bool display = false) = 0;
-    virtual grpc::StatusCode Stat(const std::string& filename, void* file_status = nullptr) = 0;
-    virtual void InotifyWatcherCallback(std::function<void()> callback) = 0;
-    virtual void InitCallbackList() = 0;
+    grpc::StatusCode RequestWriteAccess(const std::string& filename);
+    grpc::StatusCode Store(const std::string& filename);
+    grpc::StatusCode Fetch(const std::string& filename);
+    grpc::StatusCode Delete(const std::string& filename);
+    grpc::StatusCode List(std::map<std::string,int>* file_map = nullptr, bool display = false);
+    grpc::StatusCode Stat(const std::string& filename, void* file_status = nullptr);
+
+    void HandleCallbackList();
+    void InitCallbackList();
+    void Synchronized(std::function<void()> callback);
 
     template<typename RequestT, typename ResponseT>
     void CallbackList() {

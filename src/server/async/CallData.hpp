@@ -3,7 +3,7 @@
 #define SERVER_ASYNC_CALL_DATA_H
 
 #include <grpcpp/grpcpp.h>
-#include "src/common/Log.h"
+#include "src/common/Utils.hpp"
 #include "proto-src/dfs-service.grpc.pb.h"
 
 template <typename RequestT, typename ResponseT>

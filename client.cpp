@@ -1,4 +1,4 @@
-// Client binary entry point: CLI argument parsing, signal handling, DFSClient setup.
+// Client binary entry point: CLI argument parsing, signal handling, Client setup.
 #include <map>
 #include <string>
 #include <csignal>
@@ -8,10 +8,10 @@
 #include <limits.h>
 #include <sys/stat.h>
 
-#include "src/common/Log.h"
-#include "src/client/Client.h"
+#include "src/common/Utils.hpp"
+#include "src/client/Client.hpp"
 
-DFSClient client;
+Client client;
 
 void HandleSignal(int signum) {
     client.Unmount();
@@ -35,10 +35,10 @@ void Usage() {
 int main(int argc, char** argv) {
     const char* const short_opts = "a:d:m:t:h";
     const option long_opts[] = {
-        {"address",          optional_argument, nullptr, 'a'},
-        {"debug_level",      optional_argument, nullptr, 'd'},
-        {"mount_path",       optional_argument, nullptr, 'm'},
-        {"deadline_timeout", optional_argument, nullptr, 't'},
+        {"address",          required_argument, nullptr, 'a'},
+        {"debug_level",      required_argument, nullptr, 'd'},
+        {"mount_path",       required_argument, nullptr, 'm'},
+        {"deadline_timeout", required_argument, nullptr, 't'},
         {"help",             no_argument,       nullptr, 'h'},
         {nullptr,            no_argument,       nullptr,  0 }
     };

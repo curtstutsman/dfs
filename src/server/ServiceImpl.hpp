@@ -2,19 +2,20 @@
 #ifndef SERVER_SERVICE_IMPL_H
 #define SERVER_SERVICE_IMPL_H
 
+#include <memory>
 #include <mutex>
 #include <vector>
 #include <string>
 #include <condition_variable>
 #include <grpcpp/grpcpp.h>
 
-#include "src/common/Checksum.h"
-#include "src/server/LockManager.h"
-#include "src/server/async/CallData.h"
-#include "src/server/async/ServiceRunner.h"
+#include "src/server/FileStore.hpp"
+#include "src/server/LockManager.hpp"
+#include "src/server/async/CallData.hpp"
+#include "src/server/async/ServiceRunner.hpp"
 #include "proto-src/dfs-service.grpc.pb.h"
 
-using FileRequestType    = dfs_service::CallbackListRequest;
+using FileRequestType      = dfs_service::CallbackListRequest;
 using FileListResponseType = dfs_service::CallbackListResponse;
 
 class DFSServiceImpl final :
@@ -23,17 +24,12 @@ class DFSServiceImpl final :
 
 private:
     DFSServiceRunner<FileRequestType, FileListResponseType> runner;
-    std::string mount_path;
+    std::unique_ptr<FileStore> file_store;
     std::mutex queue_mutex;
     std::vector<QueueRequest<FileRequestType, FileListResponseType>> queued_tags;
     std::condition_variable updated;
     std::mutex updated_mutex;
-    CRC::Table<std::uint32_t, 32> crc_table;
     LockManager lock_manager;
-
-    const std::string WrapPath(const std::string& filepath) {
-        return this->mount_path + filepath;
-    }
 
 public:
     DFSServiceImpl(const std::string& mount_path, const std::string& server_address, int num_async_threads);

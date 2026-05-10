@@ -8,8 +8,8 @@
 #include <functional>
 #include <grpcpp/grpcpp.h>
 
-#include "src/common/Log.h"
-#include "src/server/async/CallData.h"
+#include "src/common/Utils.hpp"
+#include "src/server/async/CallData.hpp"
 #include "proto-src/dfs-service.grpc.pb.h"
 
 template <typename RequestT, typename ResponseT>

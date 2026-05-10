@@ -1,12 +1,11 @@
-// Server binary entry point: CLI argument parsing, signal handling, DFSServerNode setup.
+// Server binary entry point: CLI argument parsing, signal handling, DFSServiceImpl setup.
 #include <string>
 #include <iostream>
 #include <csignal>
 #include <getopt.h>
 
-#include "src/common/Log.h"
-#include "src/common/Path.h"
-#include "src/server/ServerNode.h"
+#include "src/common/Utils.hpp"
+#include "src/server/ServiceImpl.hpp"
 
 void HandleSignal(int signum) {
     exit(0);
@@ -26,10 +25,10 @@ void Usage() {
 int main(int argc, char** argv) {
     const char* const short_opts = "a:d:m:n:h";
     const option long_opts[] = {
-        {"address",           optional_argument, nullptr, 'a'},
-        {"debug_level",       optional_argument, nullptr, 'd'},
-        {"mount_path",        optional_argument, nullptr, 'm'},
-        {"num_async_threads", optional_argument, nullptr, 'n'},
+        {"address",           required_argument, nullptr, 'a'},
+        {"debug_level",       required_argument, nullptr, 'd'},
+        {"mount_path",        required_argument, nullptr, 'm'},
+        {"num_async_threads", required_argument, nullptr, 'n'},
         {"help",              no_argument,       nullptr, 'h'},
         {nullptr,             no_argument,       nullptr,  0 }
     };
@@ -57,8 +56,8 @@ int main(int argc, char** argv) {
     signal(SIGINT,  HandleSignal);
     signal(SIGTERM, HandleSignal);
 
-    DFSServerNode server_node(server_address, dfs_clean_path(mount_path), num_async_threads);
-    server_node.Start();
+    DFSServiceImpl service(dfs_clean_path(mount_path), server_address, num_async_threads);
+    service.Run();
 
     return 0;
 }

@@ -1,33 +1,58 @@
-// DFSClientNode: Store/Fetch/Delete/List/Stat/WriteLock RPCs and callback loop.
+// ClientNode: stub, accessors, all RPCs, and async callback loop.
+#include <chrono>
+#include <fstream>
+#include <iostream>
 #include <mutex>
+#include <sstream>
 #include <string>
 #include <thread>
-#include <chrono>
-#include <iostream>
-#include <fstream>
+#include <limits.h>
 #include <sys/stat.h>
-#include <grpcpp/grpcpp.h>
+#include <unistd.h>
 #include <utime.h>
+#include <grpcpp/grpcpp.h>
 
-#include "src/common/Log.h"
-#include "src/common/Config.h"
-#include "src/common/Checksum.h"
-#include "src/client/ClientNode.h"
+#include "src/common/Utils.hpp"
+#include "src/client/ClientNode.hpp"
 #include "proto-src/dfs-service.grpc.pb.h"
 
+using grpc::Channel;
 using grpc::Status;
 using grpc::StatusCode;
 using grpc::ClientWriter;
 using grpc::ClientReader;
 using grpc::ClientContext;
 
-using FileRequestType    = dfs_service::CallbackListRequest;
+using FileRequestType      = dfs_service::CallbackListRequest;
 using FileListResponseType = dfs_service::CallbackListResponse;
 
-DFSClientNode::DFSClientNode() : DFSClientBase() {}
-DFSClientNode::~DFSClientNode() {}
+ClientNode::ClientNode() : mount_path("mnt/client/"), unmounting(false), crc_table(CRC::CRC_32()) {
+    char host[HOST_NAME_MAX];
+    std::ostringstream ss_id;
+    gethostname(host, HOST_NAME_MAX);
+    ss_id << "T" << std::this_thread::get_id();
+    client_id = std::string(host) + ss_id.str();
+}
 
-grpc::StatusCode DFSClientNode::RequestWriteAccess(const std::string& filename) {
+ClientNode::~ClientNode() noexcept {}
+
+void ClientNode::Unmount()                          { this->unmounting = true; }
+bool ClientNode::Unmounting()                       { return this->unmounting; }
+const std::string ClientNode::ClientId()            { return this->client_id; }
+void ClientNode::SetMountPath(const std::string& p) { this->mount_path = p; }
+void ClientNode::SetDeadlineTimeout(int deadline)   { this->deadline_timeout = deadline; }
+void ClientNode::SetClientId(const std::string& id) { this->client_id = id; }
+const std::string ClientNode::MountPath()           { return this->mount_path; }
+
+void ClientNode::CreateStub(std::shared_ptr<Channel> channel) {
+    this->service_stub = dfs_service::DFSService::NewStub(channel);
+}
+
+std::string ClientNode::WrapPath(const std::string& filepath) {
+    return this->mount_path + filepath;
+}
+
+grpc::StatusCode ClientNode::RequestWriteAccess(const std::string& filename) {
     ClientContext context;
     context.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(deadline_timeout));
     dfs_service::WriteLockRequest request;
@@ -38,7 +63,7 @@ grpc::StatusCode DFSClientNode::RequestWriteAccess(const std::string& filename) 
     return status.error_code();
 }
 
-grpc::StatusCode DFSClientNode::Store(const std::string& filename) {
+grpc::StatusCode ClientNode::Store(const std::string& filename) {
     std::string full_path = WrapPath(filename);
     std::ifstream file(full_path, std::ios::binary);
     if (!file.is_open()) {
@@ -69,7 +94,7 @@ grpc::StatusCode DFSClientNode::Store(const std::string& filename) {
     return writer->Finish().error_code();
 }
 
-grpc::StatusCode DFSClientNode::Fetch(const std::string& filename) {
+grpc::StatusCode ClientNode::Fetch(const std::string& filename) {
     ClientContext context;
     context.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(deadline_timeout));
     dfs_service::FetchRequest request;
@@ -102,7 +127,7 @@ grpc::StatusCode DFSClientNode::Fetch(const std::string& filename) {
     return retval;
 }
 
-grpc::StatusCode DFSClientNode::Delete(const std::string& filename) {
+grpc::StatusCode ClientNode::Delete(const std::string& filename) {
     grpc::StatusCode lock_status = RequestWriteAccess(filename);
     if (lock_status != grpc::StatusCode::OK) {
         return lock_status;
@@ -118,7 +143,7 @@ grpc::StatusCode DFSClientNode::Delete(const std::string& filename) {
     return status.error_code();
 }
 
-grpc::StatusCode DFSClientNode::List(std::map<std::string,int>* file_map, bool display) {
+grpc::StatusCode ClientNode::List(std::map<std::string,int>* file_map, bool display) {
     ClientContext context;
     context.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(deadline_timeout));
     dfs_service::ListRequest request;
@@ -136,7 +161,7 @@ grpc::StatusCode DFSClientNode::List(std::map<std::string,int>* file_map, bool d
     return reader->Finish().error_code();
 }
 
-grpc::StatusCode DFSClientNode::Stat(const std::string& filename, void* file_status) {
+grpc::StatusCode ClientNode::Stat(const std::string& filename, void* file_status) {
     ClientContext context;
     context.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(deadline_timeout));
     dfs_service::StatRequest request;
@@ -146,12 +171,12 @@ grpc::StatusCode DFSClientNode::Stat(const std::string& filename, void* file_sta
     return status.error_code();
 }
 
-void DFSClientNode::InotifyWatcherCallback(std::function<void()> callback) {
+void ClientNode::Synchronized(std::function<void()> callback) {
     std::lock_guard<std::mutex> lock(server_lock);
     callback();
 }
 
-void DFSClientNode::HandleCallbackList() {
+void ClientNode::HandleCallbackList() {
     void* tag;
     bool ok = false;
 
@@ -194,6 +219,6 @@ void DFSClientNode::HandleCallbackList() {
     }
 }
 
-void DFSClientNode::InitCallbackList() {
+void ClientNode::InitCallbackList() {
     CallbackList<FileRequestType, FileListResponseType>();
 }

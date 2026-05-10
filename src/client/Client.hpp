@@ -1,27 +1,28 @@
-// DFSClient driver: inotify watcher threads and CLI command dispatch.
+// Client: inotify watcher threads and CLI command dispatch.
 #ifndef CLIENT_H
 #define CLIENT_H
 
 #include <string>
 #include <vector>
 #include <thread>
+#include <sys/inotify.h>
 
-#include "src/common/Inotify.h"
-#include "src/client/ClientNode.h"
+#include "src/common/Utils.hpp"
+#include "src/client/Inotify.hpp"
+#include "src/client/ClientNode.hpp"
 
-class DFSClient {
-
-protected:
+class Client {
     int deadline_timeout;
     std::string mount_path;
-    InotifyCallback callback;
-    DFSClientNode client_node;
+    ClientNode client_node;
     std::vector<NotifyStruct> events;
     std::thread thread_async;
 
+    void InotifyWatcher(uint event_type, FileDescriptor inotify_descriptor);
+
 public:
-    DFSClient();
-    ~DFSClient();
+    Client();
+    ~Client();
 
     void InitializeClientNode(const std::string& server_address);
     void ProcessCommand(const std::string& command, const std::string& filename);
@@ -29,10 +30,6 @@ public:
     void SetDeadlineTimeout(int deadline);
     void Mount(const std::string& filepath);
     void Unmount();
-
-    static void InotifyEventCallback(uint event_type, const std::string& filename, void* instance);
-    static void InotifyWatcher(InotifyCallback callback, uint event_type,
-                               FileDescriptor fd, DFSClientBase* node);
 };
 
 #endif

@@ -1,13 +1,9 @@
-// DFSServiceImpl: Store, Fetch, Delete, List, Stat, WriteLock, CallbackList handlers.
+// DFSServiceImpl: gRPC protocol handling; delegates all file I/O to FileStore.
 #include <string>
-#include <fstream>
-#include <filesystem>
-#include <sys/stat.h>
 #include <grpcpp/grpcpp.h>
 
-#include "src/common/Log.h"
-#include "src/common/Config.h"
-#include "src/server/ServiceImpl.h"
+#include "src/common/Utils.hpp"
+#include "src/server/ServiceImpl.hpp"
 
 using grpc::Status;
 using grpc::StatusCode;
@@ -18,7 +14,7 @@ using grpc::ServerContext;
 DFSServiceImpl::DFSServiceImpl(const std::string& mount_path,
                                const std::string& server_address,
                                int num_async_threads)
-    : mount_path(mount_path), crc_table(CRC::CRC_32()) {
+    : file_store(std::make_unique<FileStore>(mount_path)) {
     this->runner.SetService(this);
     this->runner.SetAddress(server_address);
     this->runner.SetNumThreads(num_async_threads);
@@ -78,27 +74,27 @@ Status DFSServiceImpl::StoreFile(ServerContext* context,
         return Status(StatusCode::CANCELLED, "Write lock not held");
     }
 
-    std::string full_path = WrapPath(request.filename());
-    if (request.crc() == dfs_file_checksum(full_path, &crc_table)) {
+    if (file_store->IsUnchanged(request.filename(), request.crc())) {
         lock_manager.release(request.filename(), request.clientid());
         return Status(StatusCode::ALREADY_EXISTS, "File unchanged");
     }
 
-    std::string captured_filename = request.filename();
-    std::string captured_clientid = request.clientid();
-    std::ofstream file(full_path, std::ios::binary | std::ios::trunc);
-    file.write(request.chunk().data(), request.chunk().size());
-
-    while (reader->Read(&request)) {
-        if (context->IsCancelled()) {
-            lock_manager.release(captured_filename, captured_clientid);
-            return Status(StatusCode::DEADLINE_EXCEEDED, "Deadline exceeded");
+    const std::string filename = request.filename();
+    const std::string clientid = request.clientid();
+    {
+        auto out = file_store->OpenWrite(filename);
+        out.write(request.chunk().data(), request.chunk().size());
+        while (reader->Read(&request)) {
+            if (context->IsCancelled()) {
+                lock_manager.release(filename, clientid);
+                return Status(StatusCode::DEADLINE_EXCEEDED, "Deadline exceeded");
+            }
+            out.write(request.chunk().data(), request.chunk().size());
         }
-        file.write(request.chunk().data(), request.chunk().size());
-    }
-    file.close();
+    }  // out flushed and closed here
 
-    lock_manager.release(captured_filename, captured_clientid);
+    file_store->AfterWrite(filename);
+    lock_manager.release(filename, clientid);
     updated.notify_all();
     return Status::OK;
 }
@@ -106,27 +102,25 @@ Status DFSServiceImpl::StoreFile(ServerContext* context,
 Status DFSServiceImpl::FetchFile(ServerContext* context,
                                   const dfs_service::FetchRequest* request,
                                   ServerWriter<dfs_service::FetchResponse>* writer) {
-    std::string full_path = WrapPath(request->filename());
-    std::ifstream file(full_path, std::ios::binary);
-    if (!file.is_open()) {
+    int64_t mtime;
+    auto in = file_store->OpenRead(request->filename(), mtime);
+    if (!in.is_open()) {
         return Status(StatusCode::NOT_FOUND, "File not found");
     }
 
-    if (request->crc() == dfs_file_checksum(full_path, &crc_table)) {
+    if (file_store->IsUnchanged(request->filename(), request->crc())) {
         return Status(StatusCode::ALREADY_EXISTS, "File unchanged");
     }
 
     dfs_service::FetchResponse response;
-    struct stat status;
-    stat(full_path.c_str(), &status);
-    response.set_mtime(status.st_mtime);
+    response.set_mtime(mtime);
 
     char buf[CHUNK_SIZE];
-    while (file.read(buf, sizeof(buf)) || file.gcount()) {
+    while (in.read(buf, sizeof(buf)) || in.gcount()) {
         if (context->IsCancelled()) {
             return Status(StatusCode::DEADLINE_EXCEEDED, "Deadline exceeded");
         }
-        response.set_chunk(buf, file.gcount());
+        response.set_chunk(buf, in.gcount());
         writer->Write(response);
     }
     return Status::OK;
@@ -142,7 +136,7 @@ Status DFSServiceImpl::DeleteFile(ServerContext* context,
         lock_manager.release(request->filename(), request->clientid());
         return Status(StatusCode::DEADLINE_EXCEEDED, "Deadline exceeded");
     }
-    if (std::remove(WrapPath(request->filename()).c_str()) != 0) {
+    if (!file_store->Remove(request->filename())) {
         lock_manager.release(request->filename(), request->clientid());
         return Status(StatusCode::NOT_FOUND, "File not found");
     }
@@ -155,14 +149,12 @@ Status DFSServiceImpl::ListFile(ServerContext* context,
                                  const dfs_service::ListRequest* request,
                                  ServerWriter<dfs_service::ListResponse>* writer) {
     dfs_service::ListResponse response;
-    struct stat status;
-    for (const auto& entry : std::filesystem::directory_iterator(mount_path)) {
+    for (const auto& file : file_store->List()) {
         if (context->IsCancelled()) {
             return Status(StatusCode::DEADLINE_EXCEEDED, "Deadline exceeded");
         }
-        response.set_filename(entry.path().filename());
-        stat(entry.path().c_str(), &status);
-        response.set_mtime(status.st_mtime);
+        response.set_filename(file.name);
+        response.set_mtime(file.mtime);
         writer->Write(response);
     }
     return Status::OK;
@@ -171,34 +163,30 @@ Status DFSServiceImpl::ListFile(ServerContext* context,
 Status DFSServiceImpl::StatFile(ServerContext* context,
                                  const dfs_service::StatRequest* request,
                                  dfs_service::StatResponse* response) {
-    struct stat status;
-    if (stat(WrapPath(request->filename()).c_str(), &status) != 0) {
-        return Status(StatusCode::NOT_FOUND, "File not found");
-    }
     if (context->IsCancelled()) {
         return Status(StatusCode::DEADLINE_EXCEEDED, "Deadline exceeded");
     }
-    response->set_size(status.st_size);
-    response->set_mtime(status.st_mtime);
+    auto stat = file_store->Stat(request->filename());
+    if (!stat) {
+        return Status(StatusCode::NOT_FOUND, "File not found");
+    }
+    response->set_size(stat->size);
+    response->set_mtime(stat->mtime);
     return Status::OK;
 }
 
 Status DFSServiceImpl::CallbackList(ServerContext* context,
                                      const dfs_service::CallbackListRequest* request,
                                      dfs_service::CallbackListResponse* response) {
-    struct stat status;
-    int file_count = 0;
-    for (const auto& file : std::filesystem::directory_iterator(mount_path)) {
-        if (stat(file.path().c_str(), &status) == 0) {
-            auto* stats = response->add_stat();
-            stats->set_filename(file.path().filename());
-            stats->set_mtime(status.st_mtime);
-            stats->set_size(status.st_size);
-            stats->set_crc(dfs_file_checksum(file.path(), &crc_table));
-            file_count++;
-        }
+    auto files = file_store->ListDetails();
+    response->set_filecount(static_cast<int64_t>(files.size()));
+    for (const auto& f : files) {
+        auto* stats = response->add_stat();
+        stats->set_filename(f.name);
+        stats->set_mtime(f.mtime);
+        stats->set_size(f.size);
+        stats->set_crc(f.crc);
     }
-    response->set_filecount(file_count);
     return Status::OK;
 }
 
