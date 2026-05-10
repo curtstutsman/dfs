@@ -44,7 +44,7 @@ inline std::uint32_t dfs_file_checksum(const std::string& filepath, CRC::Table<s
             ? file_size - current_position
             : buffer_size;
         if (!stream.read(buffer, read_size)) return crc;
-        crc = CRC::Calculate(buffer, sizeof(char) * buffer_size, *table, crc);
+        crc = CRC::Calculate(buffer, sizeof(char) * read_size, *table, crc);
         chunk_sequence++;
         current_position = stream.tellg();
     }

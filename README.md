@@ -1,6 +1,10 @@
 # dfs
 
-A distributed file system built in C++ over gRPC. Files in a local mount directory sync to a server automatically — inotify watches for local changes and pushes them, and an async callback loop pulls server-side updates back to connected clients.
+A distributed file system built in C++ over gRPC. Files in a local mount directory sync to a server automatically. inotify watches for local changes and pushes them, and an async callback loop pulls server-side updates back to connected clients.
+
+Files are streamed in 4096-byte chunks. A CRC32 checksum is sent with every request so the server can skip files that haven't changed. Store and Delete require a write lease from the server's lock manager. One writer per file at a time.
+
+`mount` starts two threads: an inotify watcher that calls Store or Delete on local filesystem events, and a gRPC completion queue loop that processes async server callbacks whenever the server's file list changes. After each callback the client fetches any file newer than its local copy.
 
 ## Dependencies
 
@@ -39,12 +43,6 @@ Disable AddressSanitizer if needed: `make ASAN=`
 ```
 
 `--debug_level 1-3` for verbose output.
-
-## How it works
-
-Files are streamed in 4096-byte chunks. A CRC32 checksum is sent with every request so the server can skip files that haven't changed. Store and Delete require a write lease from the server's lock manager. One writer per file at a time.
-
-`mount` starts two threads: an inotify watcher that calls Store or Delete on local filesystem events, and a gRPC completion queue loop that processes async server callbacks whenever the server's file list changes. After each callback the client fetches any file newer than its local copy.
 
 ## Layout
 

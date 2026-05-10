@@ -20,7 +20,7 @@ void HandleSignal(int signum) {
 
 void Usage() {
     std::cout <<
-        "\nUSAGE: dfs-client [OPTIONS] COMMAND [FILENAME]\n"
+        "\nUSAGE: client [OPTIONS] COMMAND [FILENAME]\n"
         "  -a, --address <address>          Server address (default: 0.0.0.0:53552)\n"
         "  -d, --debug_level <0-3>          Verbosity: 0=errors only, 3=max (default: 0)\n"
         "  -m, --mount_path <path>          Local mount directory\n"

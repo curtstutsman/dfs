@@ -99,8 +99,9 @@ void DFSClient::Unmount() {
         descriptors.push_back(e.fd);
     }
 
-    std::unique(descriptors.begin(), descriptors.end());
-    for (FileDescriptor fd : descriptors) {
+    auto tail = std::ranges::unique(descriptors);
+    for (auto it = descriptors.begin(); it != tail.begin(); ++it){
+        FileDescriptor fd = *it;
         if (close(fd) != 0) {
             std::cerr << "Unable to close file descriptor" << std::endl;
         }
