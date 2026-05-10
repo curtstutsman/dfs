@@ -2,7 +2,7 @@
 #include <filesystem>
 #include <sys/stat.h>
 
-#include "src/server/FileStore.h"
+#include "src/server/FileStore.hpp"
 
 FileStore::FileStore(const std::string& mount_path)
     : mount_path(mount_path), crc_table(CRC::CRC_32()) {}
