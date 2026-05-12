@@ -23,10 +23,7 @@ using grpc::ClientWriter;
 using grpc::ClientReader;
 using grpc::ClientContext;
 
-using FileRequestType      = dfs_service::CallbackListRequest;
-using FileListResponseType = dfs_service::CallbackListResponse;
-
-ClientNode::ClientNode() : mount_path("mnt/client/"), unmounting(false), crc_table(CRC::CRC_32()) {
+ClientNode::ClientNode() : mount_path("mnt/client/"), unmounting(false), crc_table(CRC::CRC_32()), completion_queue(std::make_unique<grpc::CompletionQueue>()) {
     char host[HOST_NAME_MAX];
     std::ostringstream ss_id;
     gethostname(host, HOST_NAME_MAX);
@@ -36,13 +33,47 @@ ClientNode::ClientNode() : mount_path("mnt/client/"), unmounting(false), crc_tab
 
 ClientNode::~ClientNode() noexcept {}
 
-void ClientNode::Unmount()                          { this->unmounting = true; }
-bool ClientNode::Unmounting()                       { return this->unmounting; }
-const std::string ClientNode::ClientId()            { return this->client_id; }
-void ClientNode::SetMountPath(const std::string& p) { this->mount_path = p; }
-void ClientNode::SetDeadlineTimeout(int deadline)   { this->deadline_timeout = deadline; }
-void ClientNode::SetClientId(const std::string& id) { this->client_id = id; }
-const std::string ClientNode::MountPath()           { return this->mount_path; }
+void ClientNode::Reset() {
+    unmounting = false;
+    completion_queue = std::make_unique<grpc::CompletionQueue>();
+}
+
+void ClientNode::SyncFromServer() {
+    std::map<std::string, int> file_map;
+    if (List(&file_map) != StatusCode::OK) return;
+    for (const auto& [filename, _] : file_map) {
+        Fetch(filename);
+    }
+}
+
+void ClientNode::Unmount() {
+    this->unmounting = true;
+    completion_queue->Shutdown();
+}
+
+bool ClientNode::Unmounting(){ 
+    return this->unmounting; 
+}
+
+const std::string ClientNode::ClientId(){ 
+    return this->client_id; 
+}
+
+void ClientNode::SetMountPath(const std::string& p) { 
+    this->mount_path = p; 
+}
+
+void ClientNode::SetDeadlineTimeout(int deadline) { 
+    this->deadline_timeout = deadline; 
+}
+
+void ClientNode::SetClientId(const std::string& id) { 
+    this->client_id = id; 
+}
+
+const std::string ClientNode::MountPath(){ 
+    return this->mount_path; 
+}
 
 void ClientNode::CreateStub(std::shared_ptr<Channel> channel) {
     this->service_stub = dfs_service::DFSService::NewStub(channel);
@@ -180,11 +211,11 @@ void ClientNode::HandleCallbackList() {
     void* tag;
     bool ok = false;
 
-    while (completion_queue.Next(&tag, &ok)) {
+    while (completion_queue->Next(&tag, &ok)) {
         {
             std::lock_guard<std::mutex> lock(server_lock);
-            AsyncClientData<FileListResponseType>* call_data =
-                static_cast<AsyncClientData<FileListResponseType>*>(tag);
+            AsyncClientData<dfs_service::CallbackListResponse>* call_data =
+                static_cast<AsyncClientData<dfs_service::CallbackListResponse>*>(tag);
 
             if (!ok) {
                 dfs_log(LL_ERROR) << "Completion queue callback not ok.";
@@ -220,5 +251,11 @@ void ClientNode::HandleCallbackList() {
 }
 
 void ClientNode::InitCallbackList() {
-    CallbackList<FileRequestType, FileListResponseType>();
+    dfs_service::CallbackListRequest request;
+    request.set_name("");
+    AsyncClientData<dfs_service::CallbackListResponse>* call_data = new AsyncClientData<dfs_service::CallbackListResponse>;
+    call_data->response_reader =
+        service_stub->PrepareAsyncCallbackList(&call_data->context, request, completion_queue.get());
+    call_data->response_reader->StartCall();
+    call_data->response_reader->Finish(&call_data->reply, &call_data->status, (void*)call_data);
 }

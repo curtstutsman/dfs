@@ -48,81 +48,69 @@ void Client::SetDeadlineTimeout(int deadline) {
 }
 
 void Client::Mount(const std::string& filepath) {
+    client_node.Reset();
+    client_node.SyncFromServer();
     dfs_log(LL_SYSINFO) << "Mounting on " << this->mount_path;
-    std::vector<std::thread> threads;
 
     const FileDescriptor inotify_descriptor = inotify_init();
     if (inotify_descriptor < 0) {
         std::cerr << "inotify_init failed: " << strerror(errno) << std::endl;
         exit(-1);
     }
-    uint event_flags = IN_CREATE | IN_MODIFY | IN_DELETE;
+    unsigned event_flags = IN_CREATE | IN_MODIFY | IN_DELETE;
     const WatchDescriptor wd = inotify_add_watch(inotify_descriptor, filepath.c_str(), event_flags | IN_ONLYDIR);
     if (wd < 0) {
         std::cerr << "inotify_add_watch failed: " << strerror(errno) << std::endl;
         exit(-1);
     }
-
     // Need to pass 'this' so InotifyWatcher knows which Client obj called it to access correct client_node
     std::thread thread_watcher(&Client::InotifyWatcher, this, event_flags, inotify_descriptor);
-    events.emplace_back(NotifyStruct{inotify_descriptor, wd, event_flags, &thread_watcher});
-    threads.push_back(std::move(thread_watcher));
+    events.emplace_back(NotifyStruct{inotify_descriptor, wd, event_flags, std::move(thread_watcher)});
 
-    thread_async = std::thread(&ClientNode::HandleCallbackList, &client_node);
-    threads.push_back(std::move(thread_async));
+    std::thread thread_async(&ClientNode::HandleCallbackList, &client_node);
     client_node.InitCallbackList();
-
-    for (std::thread& t : threads) {
-        if (t.joinable()) { t.join(); }
-    }
+    thread_async.join();        // Block until async thread finishes 
 }
 
 void Client::Unmount() {
-    std::vector<FileDescriptor> descriptors;
-
     client_node.Unmount();
     for (NotifyStruct& e : events) {
-        if (e.thread->joinable()) { e.thread->detach(); }
-        e.thread->~thread();
-        inotify_rm_watch(e.wd, e.inotify_descriptor);
-        descriptors.push_back(e.inotify_descriptor);
-    }
-
-    auto tail = std::ranges::unique(descriptors);
-    for (auto it = descriptors.begin(); it != tail.begin(); ++it) {
-        if (close(*it) != 0) {
-            std::cerr << "Unable to close file descriptor" << std::endl;
+        inotify_rm_watch(e.inotify_descriptor, e.wd);
+        close(e.inotify_descriptor);
+        if (e.thread.joinable()) { 
+            e.thread.join(); 
         }
     }
     events.clear();
-
-    if (thread_async.joinable()) {
-        thread_async.detach();
-        thread_async.~thread();
-    }
 }
 
-void Client::InotifyWatcher(uint event_type, FileDescriptor inotify_descriptor) {
-    int len;
-    std::allocator<char> allocator;
-    std::unique_ptr<char> handle(allocator.allocate(DFS_I_BUFFER_SIZE));
+void Client::InotifyWatcher(unsigned event_flags, FileDescriptor inotify_descriptor) {
+    ssize_t bytes_read;
+    std::unique_ptr<char[]> handle = std::make_unique<char[]>(DFS_I_BUFFER_SIZE);
     char* events_buffer = handle.get();
 
     while (true) {
-        len = read(inotify_descriptor, events_buffer, DFS_I_BUFFER_SIZE);
-        int index = 0;
+        bytes_read = read(inotify_descriptor, events_buffer, DFS_I_BUFFER_SIZE);
+        if (bytes_read <= 0) break;     // Handles cleanup when Unmount() is called and fd is closed
+        int event_index = 0;
 
+        /// \todo Instead of obtaining a global server lock in the client node, look into
+        /// a queue workload approach. Inotify and HandleCallback can both add to queue
+        /// and consumer can get execute the gRPC services. Eliminates file data race issue
+        /// if we only have one consumer
         client_node.Synchronized([&] {
-            while (index < len) {
-                inotify_event* event = reinterpret_cast<inotify_event*>(&events_buffer[index]);
-                if ((event_type & event->mask) && event->name[0] != '.') {
+            while (event_index < bytes_read) {
+                inotify_event* event = reinterpret_cast<inotify_event*>(&events_buffer[event_index]);
+                // Verify event type and filename
+                if ((event_flags & event->mask) && event->name[0] != '.') {
                     if (event->mask & IN_CREATE || event->mask & IN_MODIFY) {
                         client_node.Store(event->name);
-                    } else if (event->mask & IN_DELETE) {
+                    } 
+                    else if (event->mask & IN_DELETE) {
                         client_node.Delete(event->name);
                     }
                 }
-                index += DFS_I_EVENT_SIZE + event->len;
+                event_index += DFS_I_EVENT_SIZE + event->len;
             }
             if (errno == EINTR) {
                 dfs_log(LL_ERROR) << "inotify interrupted";

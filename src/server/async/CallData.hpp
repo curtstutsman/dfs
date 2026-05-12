@@ -40,15 +40,19 @@ public:
         Proceed();
     }
 
-    void Proceed() {
+    void Proceed(bool ok = true) {
         if (status == CREATE) {
             status = PROCESS;
             manager->RequestCallback(&ctx_, &request_, &responder, cq, this);
         } else if (status == PROCESS) {
             new DFSCallData<RequestT, ResponseT>(service, manager, cq);
-            manager->ProcessCallback(&ctx_, &request_, &reply_);
-            status = FINISH;
-            responder.Finish(reply_, grpc::Status::OK, this);
+            if (ok) {
+                manager->ProcessCallback(&ctx_, &request_, &reply_);
+                status = FINISH;
+                responder.Finish(reply_, grpc::Status::OK, this);
+            } else {
+                delete this;
+            }
         } else {
             delete this;
         }

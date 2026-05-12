@@ -37,6 +37,9 @@ $(BIN)/dfs-tests: $(PROTO_OBJS) $(COMMON_OBJS) $(OBJ)/ServiceImpl.o $(OBJ)/FileS
 test: $(BIN)/dfs-tests
 	./$(BIN)/dfs-tests
 
+integration: all
+	python3 -m unittest discover -s tests -p "integration_test.py" -v
+
 $(OBJ)/%.o: %.cpp
 	$(CXX) $< -c $(CXXFLAGS) $(CPPFLAGS) -o $@
 
@@ -56,4 +59,4 @@ clean:
 clean_all: clean
 	rm -f proto-src/*.pb.cc proto-src/*.pb.h
 
-.PHONY: all protos dirs clean clean_all test
+.PHONY: all protos dirs clean clean_all test integration

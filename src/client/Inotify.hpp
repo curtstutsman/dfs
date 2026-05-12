@@ -11,7 +11,7 @@ struct NotifyStruct {
     FileDescriptor  inotify_descriptor;
     WatchDescriptor wd;
     uint            event_type;
-    std::thread*    thread;
+    std::thread     thread;
 };
 
 #endif

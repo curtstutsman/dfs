@@ -29,7 +29,7 @@ private:
     bool unmounting;
     CRC::Table<std::uint32_t, 32> crc_table;
     std::unique_ptr<dfs_service::DFSService::Stub> service_stub;
-    grpc::CompletionQueue completion_queue;
+    std::unique_ptr<grpc::CompletionQueue> completion_queue;
     std::mutex server_lock;
 
     std::string WrapPath(const std::string& filepath);
@@ -42,6 +42,8 @@ public:
     void SetDeadlineTimeout(int deadline);
     void SetClientId(const std::string& id);
     const std::string MountPath();
+    void Reset();
+    void SyncFromServer();
     void Unmount();
     bool Unmounting();
     const std::string ClientId();
@@ -57,17 +59,6 @@ public:
     void HandleCallbackList();
     void InitCallbackList();
     void Synchronized(std::function<void()> callback);
-
-    template<typename RequestT, typename ResponseT>
-    void CallbackList() {
-        RequestT request;
-        request.set_name("");
-        AsyncClientData<ResponseT>* call_data = new AsyncClientData<ResponseT>;
-        call_data->response_reader =
-            service_stub->PrepareAsyncCallbackList(&call_data->context, request, &completion_queue);
-        call_data->response_reader->StartCall();
-        call_data->response_reader->Finish(&call_data->reply, &call_data->status, (void*)call_data);
-    }
 };
 
 #endif

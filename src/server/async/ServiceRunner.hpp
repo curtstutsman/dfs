@@ -37,11 +37,8 @@ static void HandleAsyncRPC(dfs_service::DFSService::AsyncService* service,
     bool ok;
 
     while (true) {
-        if (!cq->Next(&tag, &ok) || !ok) {
-            dfs_log(LL_ERROR) << "Async completion queue error";
-            continue;
-        }
-        static_cast<DFSCallData<RequestT, ResponseT>*>(tag)->Proceed();
+        if (!cq->Next(&tag, &ok)) break;
+        static_cast<DFSCallData<RequestT, ResponseT>*>(tag)->Proceed(ok);
     }
 }
 
