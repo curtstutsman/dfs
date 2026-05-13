@@ -2,13 +2,13 @@
 #ifndef SERVER_LOCK_MANAGER_H
 #define SERVER_LOCK_MANAGER_H
 
-#include <map>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 
 class LockManager {
 private:
-    std::map<std::string, std::string> lock_table;
+    std::unordered_map<std::string, std::string> lock_table;
     std::mutex mutex;
 
 public:

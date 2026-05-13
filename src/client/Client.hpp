@@ -12,12 +12,12 @@
 #include "src/client/ClientNode.hpp"
 
 class Client {
-    // Timeout for RPC calls
-    int deadline_timeout;
     // Path to observe for mount command
     std::string mount_path;
+
     // ClientNode implements gRPC service
     ClientNode client_node;
+
     // For tracking watched directories
     std::vector<NotifyStruct> events;
 
@@ -30,6 +30,7 @@ public:
 
     // Reads inotify fd for events and generates corresponding gRPC calls
     void InitializeClientNode(const std::string& server_address);
+
     // Handles command given from cl
     void ProcessCommand(const std::string& command, const std::string& filename);
 
@@ -38,6 +39,7 @@ public:
 
     // Spawn Inotify and HandleCallback thread and block till cleanup
     void Mount(const std::string& filepath);
+    
     // Close Inotify fds and terminate inotify thread
     void Unmount();
 };

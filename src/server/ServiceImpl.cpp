@@ -56,10 +56,8 @@ void DFSServiceImpl::ProcessQueuedRequests() {
                     queue_request.response, queue_request.cq, queue_request.cq, queue_request.tag);
                 queue_request.finished = true;
             }
-            this->queued_tags.erase(
-                std::remove_if(this->queued_tags.begin(), this->queued_tags.end(),
-                    [](const QueueRequest<FileRequestType, FileListResponseType>& r) { return r.finished; }),
-                this->queued_tags.end());
+            std::erase_if(this->queued_tags,
+                [](const QueueRequest<FileRequestType, FileListResponseType>& r) { return r.finished; });
         }
     }
 }
@@ -115,7 +113,7 @@ Status DFSServiceImpl::FetchFile(ServerContext* context,
     dfs_service::FetchResponse response;
     response.set_mtime(mtime);
 
-    char buf[CHUNK_SIZE];
+    char buf[kChunkSize];
     while (in.read(buf, sizeof(buf)) || in.gcount()) {
         if (context->IsCancelled()) {
             return Status(StatusCode::DEADLINE_EXCEEDED, "Deadline exceeded");

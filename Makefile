@@ -35,10 +35,7 @@ $(BIN)/dfs-tests: $(PROTO_OBJS) $(COMMON_OBJS) $(OBJ)/ServiceImpl.o $(OBJ)/FileS
 	$(CXX) $^ $(CXXFLAGS) $(CPPFLAGS) $(LDFLAGS) $(GTEST_LIBS) -o $@
 
 test: $(BIN)/dfs-tests
-	./$(BIN)/dfs-tests
-
-integration: all
-	python3 -m unittest discover -s tests -p "integration_test.py" -v
+	./$(BIN)/dfs-tests && python3 -m unittest discover -s tests -p "integration_test.py" -v
 
 $(OBJ)/%.o: %.cpp
 	$(CXX) $< -c $(CXXFLAGS) $(CPPFLAGS) -o $@

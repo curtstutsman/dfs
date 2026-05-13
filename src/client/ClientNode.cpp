@@ -1,5 +1,6 @@
 // ClientNode: stub, accessors, all RPCs, and async callback loop.
 #include <chrono>
+#include <cstdio>
 #include <fstream>
 #include <iostream>
 #include <mutex>
@@ -23,7 +24,11 @@ using grpc::ClientWriter;
 using grpc::ClientReader;
 using grpc::ClientContext;
 
-ClientNode::ClientNode() : mount_path("mnt/client/"), unmounting(false), crc_table(CRC::CRC_32()), completion_queue(std::make_unique<grpc::CompletionQueue>()) {
+ClientNode::ClientNode() 
+        : mount_path("mnt/client/"), 
+          crc_table(CRC::CRC_32()), 
+          completion_queue(std::make_unique<grpc::CompletionQueue>()) 
+{
     char host[HOST_NAME_MAX];
     std::ostringstream ss_id;
     gethostname(host, HOST_NAME_MAX);
@@ -32,28 +37,6 @@ ClientNode::ClientNode() : mount_path("mnt/client/"), unmounting(false), crc_tab
 }
 
 ClientNode::~ClientNode() noexcept {}
-
-void ClientNode::Reset() {
-    unmounting = false;
-    completion_queue = std::make_unique<grpc::CompletionQueue>();
-}
-
-void ClientNode::SyncFromServer() {
-    std::map<std::string, int> file_map;
-    if (List(&file_map) != StatusCode::OK) return;
-    for (const auto& [filename, _] : file_map) {
-        Fetch(filename);
-    }
-}
-
-void ClientNode::Unmount() {
-    this->unmounting = true;
-    completion_queue->Shutdown();
-}
-
-bool ClientNode::Unmounting(){ 
-    return this->unmounting; 
-}
 
 const std::string ClientNode::ClientId(){ 
     return this->client_id; 
@@ -64,7 +47,7 @@ void ClientNode::SetMountPath(const std::string& p) {
 }
 
 void ClientNode::SetDeadlineTimeout(int deadline) { 
-    this->deadline_timeout = deadline; 
+    this->deadline_timeout = deadline;
 }
 
 void ClientNode::SetClientId(const std::string& id) { 
@@ -75,6 +58,23 @@ const std::string ClientNode::MountPath(){
     return this->mount_path; 
 }
 
+void ClientNode::SyncFromServer() {
+    std::map<std::string, int64_t> file_map;
+    if (List(&file_map) != StatusCode::OK) return;
+    for (const auto& [filename, server_mtime] : file_map) {
+        struct stat local_stat;
+        if (stat(WrapPath(filename).c_str(), &local_stat) == 0 &&
+            local_stat.st_mtime >= server_mtime) {
+            continue;
+        }
+        Fetch(filename);
+    }
+}
+
+void ClientNode::Shutdown() {
+    completion_queue->Shutdown();
+}
+
 void ClientNode::CreateStub(std::shared_ptr<Channel> channel) {
     this->service_stub = dfs_service::DFSService::NewStub(channel);
 }
@@ -83,18 +83,25 @@ std::string ClientNode::WrapPath(const std::string& filepath) {
     return this->mount_path + filepath;
 }
 
+void ClientNode::CreateDeadline(ClientContext& context){
+    context.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(deadline_timeout));
+}
+
 grpc::StatusCode ClientNode::RequestWriteAccess(const std::string& filename) {
     ClientContext context;
-    context.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(deadline_timeout));
+    CreateDeadline(context);
     dfs_service::WriteLockRequest request;
     dfs_service::WriteLockResponse response;
+
     request.set_filename(filename);
     request.set_clientid(ClientId());
+
     Status status = service_stub->WriteLock(&context, request, &response);
     return status.error_code();
 }
 
 grpc::StatusCode ClientNode::Store(const std::string& filename) {
+    // Verify file existence
     std::string full_path = WrapPath(filename);
     std::ifstream file(full_path, std::ios::binary);
     if (!file.is_open()) {
@@ -107,17 +114,17 @@ grpc::StatusCode ClientNode::Store(const std::string& filename) {
     }
 
     ClientContext context;
-    context.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(deadline_timeout));
+    CreateDeadline(context);
     dfs_service::StoreResponse response;
     dfs_service::StoreRequest request;
 
     request.set_filename(filename);
     request.set_clientid(ClientId());
     request.set_crc(dfs_file_checksum(full_path, &crc_table));
-    auto writer = service_stub->StoreFile(&context, &response);
+    char buf[kChunkSize];
 
-    char buf[CHUNK_SIZE];
-    while (file.read(buf, CHUNK_SIZE) || file.gcount()) {
+    auto writer = service_stub->StoreFile(&context, &response);
+    while (file.read(buf, kChunkSize) || file.gcount()) {
         request.set_chunk(buf, file.gcount());
         writer->Write(request);
     }
@@ -127,7 +134,7 @@ grpc::StatusCode ClientNode::Store(const std::string& filename) {
 
 grpc::StatusCode ClientNode::Fetch(const std::string& filename) {
     ClientContext context;
-    context.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(deadline_timeout));
+    CreateDeadline(context);
     dfs_service::FetchRequest request;
     dfs_service::FetchResponse response;
 
@@ -137,23 +144,30 @@ grpc::StatusCode ClientNode::Fetch(const std::string& filename) {
     request.set_crc(dfs_file_checksum(full_path, &crc_table));
 
     auto reader = service_stub->FetchFile(&context, request);
-
     bool has_data = reader->Read(&response);
     if (!has_data) {
         return reader->Finish().error_code();
     }
-    std::ofstream file(full_path, std::ios::binary | std::ios::trunc);
-    file.write(response.chunk().data(), response.chunk().size());
-    while (reader->Read(&response)) {
+
+    // Write to a temp file first; rename atomically on success so a mid-transfer
+    // failure never leaves the local file truncated.
+    std::string tmp_path = full_path + ".dfs_tmp";
+    {
+        std::ofstream file(tmp_path, std::ios::binary | std::ios::trunc);
         file.write(response.chunk().data(), response.chunk().size());
+        while (reader->Read(&response)) {
+            file.write(response.chunk().data(), response.chunk().size());
+        }
     }
-    file.close();
 
     StatusCode retval = reader->Finish().error_code();
     if (retval == StatusCode::OK) {
+        std::rename(tmp_path.c_str(), full_path.c_str());
         struct utimbuf times;
         times.modtime = response.mtime();
         utime(full_path.c_str(), &times);
+    } else {
+        std::remove(tmp_path.c_str());
     }
     return retval;
 }
@@ -165,18 +179,19 @@ grpc::StatusCode ClientNode::Delete(const std::string& filename) {
     }
 
     ClientContext context;
-    context.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(deadline_timeout));
+    CreateDeadline(context);
     dfs_service::DeleteRequest request;
     dfs_service::DeleteResponse response;
+
     request.set_filename(filename);
     request.set_clientid(ClientId());
     Status status = service_stub->DeleteFile(&context, request, &response);
     return status.error_code();
 }
 
-grpc::StatusCode ClientNode::List(std::map<std::string,int>* file_map, bool display) {
+grpc::StatusCode ClientNode::List(std::map<std::string,int64_t>* file_map, bool display) {
     ClientContext context;
-    context.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(deadline_timeout));
+    CreateDeadline(context);
     dfs_service::ListRequest request;
     dfs_service::ListResponse response;
 
@@ -192,13 +207,12 @@ grpc::StatusCode ClientNode::List(std::map<std::string,int>* file_map, bool disp
     return reader->Finish().error_code();
 }
 
-grpc::StatusCode ClientNode::Stat(const std::string& filename, void* file_status) {
+grpc::StatusCode ClientNode::Stat(const std::string& filename, dfs_service::StatResponse& response) {
     ClientContext context;
-    context.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(deadline_timeout));
+    CreateDeadline(context);
     dfs_service::StatRequest request;
     request.set_filename(filename);
-    auto* response = static_cast<dfs_service::StatResponse*>(file_status);
-    Status status = service_stub->StatFile(&context, request, response);
+    Status status = service_stub->StatFile(&context, request, &response);
     return status.error_code();
 }
 
@@ -222,10 +236,10 @@ void ClientNode::HandleCallbackList() {
             }
 
             if (ok && call_data->status.ok()) {
-                auto response = call_data->reply;
+                const auto& response = call_data->reply;
                 struct stat client_stats;
                 for (int i = 0; i < response.filecount(); ++i) {
-                    auto server_stats = response.stat(i);
+                    const auto& server_stats = response.stat(i);
                     if (server_stats.crc() == dfs_file_checksum(WrapPath(server_stats.filename()), &crc_table)) {
                         continue;
                     }
@@ -239,8 +253,8 @@ void ClientNode::HandleCallbackList() {
                 }
             } else {
                 dfs_log(LL_ERROR) << "Async callback failed: " << call_data->status.error_message()
-                    << ". Retrying in " << DFS_RESET_TIMEOUT << "ms.";
-                std::this_thread::sleep_for(std::chrono::milliseconds(DFS_RESET_TIMEOUT));
+                    << ". Retrying in " << kResetTimeoutMs << "ms.";
+                std::this_thread::sleep_for(std::chrono::milliseconds(kResetTimeoutMs));
             }
 
             delete call_data;
@@ -252,10 +266,9 @@ void ClientNode::HandleCallbackList() {
 
 void ClientNode::InitCallbackList() {
     dfs_service::CallbackListRequest request;
-    request.set_name("");
+    request.set_clientid(ClientId());
     AsyncClientData<dfs_service::CallbackListResponse>* call_data = new AsyncClientData<dfs_service::CallbackListResponse>;
-    call_data->response_reader =
-        service_stub->PrepareAsyncCallbackList(&call_data->context, request, completion_queue.get());
+    call_data->response_reader = service_stub->PrepareAsyncCallbackList(&call_data->context, request, completion_queue.get());
     call_data->response_reader->StartCall();
     call_data->response_reader->Finish(&call_data->reply, &call_data->status, (void*)call_data);
 }
