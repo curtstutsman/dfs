@@ -1,6 +1,7 @@
 // ClientNode: stub, accessors, all RPCs, and async callback loop.
 #include <chrono>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <mutex>
@@ -60,14 +61,33 @@ const std::string ClientNode::MountPath(){
 
 void ClientNode::SyncFromServer() {
     std::map<std::string, int64_t> file_map;
-    if (List(&file_map) != StatusCode::OK) return;
+    if (List(&file_map) != StatusCode::OK) {
+        dfs_log(LL_ERROR) << "Initial sync failed";
+        return;
+    }
+
     for (const auto& [filename, server_mtime] : file_map) {
         struct stat local_stat;
-        if (stat(WrapPath(filename).c_str(), &local_stat) == 0 &&
-            local_stat.st_mtime >= server_mtime) {
-            continue;
+        // If file dne on client
+        if (stat(WrapPath(filename).c_str(), &local_stat) != 0) {
+            Fetch(filename);
+        } 
+        // If client has newer version
+        else if (local_stat.st_mtime > server_mtime) {
+            Store(filename);
         }
-        Fetch(filename);
+        // If server has newer version 
+        else if (local_stat.st_mtime < server_mtime) {
+            Fetch(filename);
+        }
+    }
+
+    // If file dne on server
+    for (const auto& entry : std::filesystem::directory_iterator(mount_path)) {
+        std::string filename = entry.path().filename().string();
+        if (!file_map.count(filename)) {
+            Store(filename);
+        }
     }
 }
 
@@ -166,7 +186,8 @@ grpc::StatusCode ClientNode::Fetch(const std::string& filename) {
         struct utimbuf times;
         times.modtime = response.mtime();
         utime(full_path.c_str(), &times);
-    } else {
+    } 
+    else {
         std::remove(tmp_path.c_str());
     }
     return retval;
@@ -207,12 +228,17 @@ grpc::StatusCode ClientNode::List(std::map<std::string,int64_t>* file_map, bool 
     return reader->Finish().error_code();
 }
 
-grpc::StatusCode ClientNode::Stat(const std::string& filename, dfs_service::StatResponse& response) {
+grpc::StatusCode ClientNode::Stat(const std::string& filename) {
     ClientContext context;
     CreateDeadline(context);
     dfs_service::StatRequest request;
+    dfs_service::StatResponse response;
     request.set_filename(filename);
+
     Status status = service_stub->StatFile(&context, request, &response);
+    if (status.error_code() == StatusCode::OK) {
+        std::cout << filename << ": size=" << response.size() << "  mtime=" << response.mtime() << "\n";
+    }
     return status.error_code();
 }
 

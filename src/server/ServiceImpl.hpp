@@ -36,14 +36,18 @@ public:
     ~DFSServiceImpl();
 
     void Run();
+
+    // Process requests from queued_tags and re-queue them on completion queue
     void ProcessQueuedRequests();
 
+    // Queues the pending registration in queued_tags
     void RequestCallback(grpc::ServerContext* context,
                          FileRequestType* request,
                          grpc::ServerAsyncResponseWriter<FileListResponseType>* response,
                          grpc::ServerCompletionQueue* cq,
                          void* tag) override;
 
+    // Delegates to DFSServiceImpl's CallbackList
     void ProcessCallback(grpc::ServerContext* context,
                          FileRequestType* request,
                          FileListResponseType* response) override;

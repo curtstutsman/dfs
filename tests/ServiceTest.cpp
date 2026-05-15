@@ -139,20 +139,15 @@ TEST_F(ServiceTestFixture, List_WithFiles_ReturnsAllFilenames) {
 
 // ── Stat ─────────────────────────────────────────────────────────────────────
 
-TEST_F(ServiceTestFixture, Stat_ExistingFile_ReturnsSizeAndMtime) {
+TEST_F(ServiceTestFixture, Stat_ExistingFile_ReturnsOk) {
     const std::string content = "stat me";
     write_file(kClientMnt + "stat.txt", content);
     ASSERT_EQ(client->Store("stat.txt"), grpc::StatusCode::OK);
-
-    dfs_service::StatResponse stat;
-    EXPECT_EQ(client->Stat("stat.txt", stat), grpc::StatusCode::OK);
-    EXPECT_EQ(stat.size(), static_cast<int64_t>(content.size()));
-    EXPECT_GT(stat.mtime(), 0);
+    EXPECT_EQ(client->Stat("stat.txt"), grpc::StatusCode::OK);
 }
 
 TEST_F(ServiceTestFixture, Stat_NonexistentFile_ReturnsNotFound) {
-    dfs_service::StatResponse stat;
-    EXPECT_EQ(client->Stat("nothing.txt", stat), grpc::StatusCode::NOT_FOUND);
+    EXPECT_EQ(client->Stat("nothing.txt"), grpc::StatusCode::NOT_FOUND);
 }
 
 // ── WriteLock ────────────────────────────────────────────────────────────────

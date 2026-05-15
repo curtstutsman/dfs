@@ -74,7 +74,7 @@ public:
     grpc::StatusCode Fetch(const std::string& filename);
     grpc::StatusCode Delete(const std::string& filename);
     grpc::StatusCode List(std::map<std::string,int64_t>* file_map = nullptr, bool display = false);
-    grpc::StatusCode Stat(const std::string& filename, dfs_service::StatResponse& response);
+    grpc::StatusCode Stat(const std::string& filename);
 
     // Acquires server_lock then runs callback; serializes inotify events against the callback loop.
     void Synchronized(std::function<void()> callback);

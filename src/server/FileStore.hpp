@@ -32,10 +32,6 @@ public:
     std::vector<FileInfo>    List() const;
     std::optional<FileStat>  Stat(const std::string& filename) const;
     std::vector<FileDetails> ListDetails() const;
-
-    // Override in subclasses to add replication (e.g. ReplicatedFileStore)
-    virtual void AfterWrite(const std::string& filename) {}
-    virtual void AfterDelete(const std::string& filename) {}
 };
 
 #endif

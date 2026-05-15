@@ -59,16 +59,14 @@ public:
 inline std::uint32_t dfs_file_checksum(const std::string& filepath,
                                        CRC::Table<std::uint32_t, 32>* table) {
     struct stat st;
-    if (lstat(filepath.c_str(), &st) != 0) return 0;
+    if (lstat(filepath.c_str(), &st) != 0) {
+        return 0;
+    }
 
     std::size_t file_size   = static_cast<std::size_t>(st.st_size);
-    std::size_t buffer_size = (file_size < kCrcBufSize)
-        ? std::max(file_size / 2, std::size_t{1})
-        : kCrcBufSize;
-
+    std::size_t buffer_size = (file_size < kCrcBufSize) ? std::max(file_size / 2, std::size_t{1}) : kCrcBufSize;
     std::vector<char> buf(buffer_size);
     std::ifstream stream(filepath, std::ios::in | std::ios::binary);
-    if (!stream.is_open()) return 0;
 
     std::uint32_t crc = 0;
     while (stream.read(buf.data(), static_cast<std::streamsize>(buffer_size)) || stream.gcount()) {

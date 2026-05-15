@@ -14,7 +14,8 @@ using grpc::ServerContext;
 DFSServiceImpl::DFSServiceImpl(const std::string& mount_path,
                                const std::string& server_address,
                                int num_async_threads)
-    : file_store(std::make_unique<FileStore>(mount_path)) {
+    : file_store(std::make_unique<FileStore>(mount_path)) 
+{
     this->runner.SetService(this);
     this->runner.SetAddress(server_address);
     this->runner.SetNumThreads(num_async_threads);
@@ -91,7 +92,6 @@ Status DFSServiceImpl::StoreFile(ServerContext* context,
         }
     }  // out flushed and closed here
 
-    file_store->AfterWrite(filename);
     lock_manager.release(filename, clientid);
     updated.notify_all();
     return Status::OK;
@@ -173,6 +173,7 @@ Status DFSServiceImpl::StatFile(ServerContext* context,
     return Status::OK;
 }
 
+/// \todo would like to notify only the updated files, not all
 Status DFSServiceImpl::CallbackList(ServerContext* context,
                                      const dfs_service::CallbackListRequest* request,
                                      dfs_service::CallbackListResponse* response) {
@@ -188,6 +189,7 @@ Status DFSServiceImpl::CallbackList(ServerContext* context,
     return Status::OK;
 }
 
+/// \todo implement some sort of retry or queued access mechanism
 Status DFSServiceImpl::WriteLock(ServerContext* context,
                                   const dfs_service::WriteLockRequest* request,
                                   dfs_service::WriteLockResponse* response) {

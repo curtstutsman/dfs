@@ -31,7 +31,6 @@ std::ifstream FileStore::OpenRead(const std::string& filename, int64_t& mtime_ou
 
 bool FileStore::Remove(const std::string& filename) {
     if (std::remove(WrapPath(filename).c_str()) != 0) return false;
-    AfterDelete(filename);
     return true;
 }
 

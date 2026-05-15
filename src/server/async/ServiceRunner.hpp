@@ -32,6 +32,7 @@ template <typename RequestT, typename ResponseT>
 static void HandleAsyncRPC(dfs_service::DFSService::AsyncService* service,
                             DFSCallDataManager<RequestT, ResponseT>* manager,
                             std::shared_ptr<grpc::ServerCompletionQueue> cq) {
+                                
     new DFSCallData<RequestT, ResponseT>(service, manager, cq.get());
     void* tag;
     bool ok;
@@ -62,11 +63,25 @@ protected:
 public:
     DFSServiceRunner() {}
 
-    void SetService(grpc::Service* svc)                       { this->service = svc; }
-    void SetAddress(const std::string& addr)                  { this->server_address = addr; }
-    void SetNumThreads(int n)                                 { this->num_async_threads = n; }
-    void SetQueuedRequestsCallback(std::function<void()> cb)  { this->queued_requests_callback = cb; }
-    void Shutdown() noexcept                                  { this->server->Shutdown(); }
+    void SetService(grpc::Service* svc) { 
+        this->service = svc; 
+    }
+
+    void SetAddress(const std::string& addr) { 
+        this->server_address = addr; 
+    }
+
+    void SetNumThreads(int n) { 
+        this->num_async_threads = n; 
+    }
+
+    void SetQueuedRequestsCallback(std::function<void()> cb) {
+         this->queued_requests_callback = cb; 
+    }
+
+    void Shutdown() noexcept { 
+        this->server->Shutdown(); 
+    }
 
     void Run() {
         grpc::ServerBuilder builder;

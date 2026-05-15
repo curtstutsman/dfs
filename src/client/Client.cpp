@@ -17,31 +17,34 @@ Client::~Client() noexcept { this->Unmount(); }
 void Client::ProcessCommand(const std::string& command, const std::string& filename) {
     if (command == "mount") {
         Mount(this->mount_path);
-    } else if (command == "fetch") {
+    } 
+    else if (command == "fetch") {
         if (client_node.Fetch(filename) != grpc::StatusCode::OK) {
             dfs_log(LL_ERROR) << "fetch failed: " << filename;
         }
-    } else if (command == "store") {
+    } 
+    else if (command == "store") {
         if (client_node.Store(filename) != grpc::StatusCode::OK) {
             dfs_log(LL_ERROR) << "store failed: " << filename;
         }
-    } else if (command == "delete") {
+    } 
+    else if (command == "delete") {
         if (client_node.Delete(filename) != grpc::StatusCode::OK) {
             dfs_log(LL_ERROR) << "delete failed: " << filename;
         }
-    } else if (command == "list") {
+    } 
+    else if (command == "list") {
         std::map<std::string,int64_t> file_map;
         if (client_node.List(&file_map, true) != grpc::StatusCode::OK) {
             dfs_log(LL_ERROR) << "list failed";
         }
-    } else if (command == "stat") {
-        dfs_service::StatResponse st;
-        auto rc = client_node.Stat(filename, st);
-        if (rc == grpc::StatusCode::OK)
-            std::cout << filename << ": size=" << st.size() << "  mtime=" << st.mtime() << "\n";
-        else
+    } 
+    else if (command == "stat") {
+        if (client_node.Stat(filename) != grpc::StatusCode::OK) {
             dfs_log(LL_ERROR) << "stat failed: " << filename;
-    } else {
+        }
+    } 
+    else {
         dfs_log(LL_ERROR) << "Unknown command: " << command;
     }
 }
@@ -104,14 +107,19 @@ void Client::InotifyWatcher(unsigned event_flags, FileDescriptor inotify_descrip
         bytes_read = read(inotify_descriptor, events_buffer, kIBufferSize);
         if (bytes_read <= 0) break;
         int event_index = 0;
-
+        /// \todo Instead of obtaining a global server lock in the client node, look into
+        /// a queue workload approach. Inotify and HandleCallback can both add to queue
+        /// and consumer can get execute the gRPC services. Eliminates file data race issue
+        /// if we only have one consumer
         client_node.Synchronized([&] {
             while (event_index < bytes_read) {
                 inotify_event* event = reinterpret_cast<inotify_event*>(&events_buffer[event_index]);
+                // Verify event time and filename
                 if ((event_flags & event->mask) && event->name[0] != '.') {
                     if (event->mask & IN_CREATE || event->mask & IN_MODIFY) {
                         client_node.Store(event->name);
-                    } else if (event->mask & IN_DELETE) {
+                    } 
+                    else if (event->mask & IN_DELETE) {
                         client_node.Delete(event->name);
                     }
                 }

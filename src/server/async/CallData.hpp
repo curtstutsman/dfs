@@ -17,6 +17,7 @@ public:
     virtual void ProcessCallback(grpc::ServerContext* context, RequestT* request, ResponseT* response) {}
 };
 
+// State machine used for CallbackList
 template <typename RequestT, typename ResponseT>
 class DFSCallData {
 
@@ -36,24 +37,33 @@ public:
     DFSCallData(dfs_service::DFSService::AsyncService* service,
                 DFSCallDataManager<RequestT, ResponseT>* manager,
                 grpc::ServerCompletionQueue* cq)
-        : service(service), manager(manager), cq(cq), responder(&ctx_), status(CREATE) {
+        : service(service), 
+          manager(manager), 
+          cq(cq), 
+          responder(&ctx_), 
+          status(CREATE) 
+    {
         Proceed();
     }
 
+    // Move to next stage in state machine
     void Proceed(bool ok = true) {
         if (status == CREATE) {
             status = PROCESS;
             manager->RequestCallback(&ctx_, &request_, &responder, cq, this);
-        } else if (status == PROCESS) {
+        } 
+        else if (status == PROCESS) {
             new DFSCallData<RequestT, ResponseT>(service, manager, cq);
             if (ok) {
                 manager->ProcessCallback(&ctx_, &request_, &reply_);
                 status = FINISH;
                 responder.Finish(reply_, grpc::Status::OK, this);
-            } else {
+            } 
+            else {
                 delete this;
             }
-        } else {
+        } 
+        else {
             delete this;
         }
     }
