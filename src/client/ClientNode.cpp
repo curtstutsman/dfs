@@ -128,6 +128,15 @@ grpc::StatusCode ClientNode::Store(const std::string& filename) {
         return StatusCode::CANCELLED;
     }
 
+    const std::uint32_t local_crc = dfs_file_checksum(full_path, &crc_table);
+    {
+        std::lock_guard<std::mutex> cache_lock(crc_cache_mutex);
+        auto it = file_crcs.find(filename);
+        if (it != file_crcs.end() && it->second == local_crc) {
+            return StatusCode::ALREADY_EXISTS;
+        }
+    }
+
     grpc::StatusCode lock_status = RequestWriteAccess(filename);
     if (lock_status != grpc::StatusCode::OK) {
         return lock_status;
@@ -140,7 +149,7 @@ grpc::StatusCode ClientNode::Store(const std::string& filename) {
 
     request.set_filename(filename);
     request.set_clientid(ClientId());
-    request.set_crc(dfs_file_checksum(full_path, &crc_table));
+    request.set_crc(local_crc);
     char buf[kChunkSize];
 
     auto writer = service_stub->StoreFile(&context, &response);
@@ -149,7 +158,12 @@ grpc::StatusCode ClientNode::Store(const std::string& filename) {
         writer->Write(request);
     }
     writer->WritesDone();
-    return writer->Finish().error_code();
+    StatusCode rc = writer->Finish().error_code();
+    if (rc == StatusCode::OK || rc == StatusCode::ALREADY_EXISTS) {
+        std::lock_guard<std::mutex> cache_lock(crc_cache_mutex);
+        file_crcs[filename] = local_crc;
+    }
+    return rc;
 }
 
 grpc::StatusCode ClientNode::Fetch(const std::string& filename) {
@@ -186,7 +200,9 @@ grpc::StatusCode ClientNode::Fetch(const std::string& filename) {
         struct utimbuf times;
         times.modtime = response.mtime();
         utime(full_path.c_str(), &times);
-    } 
+        std::lock_guard<std::mutex> cache_lock(crc_cache_mutex);
+        file_crcs[filename] = dfs_file_checksum(full_path, &crc_table);
+    }
     else {
         std::remove(tmp_path.c_str());
     }
@@ -207,6 +223,10 @@ grpc::StatusCode ClientNode::Delete(const std::string& filename) {
     request.set_filename(filename);
     request.set_clientid(ClientId());
     Status status = service_stub->DeleteFile(&context, request, &response);
+    if (status.error_code() == StatusCode::OK) {
+        std::lock_guard<std::mutex> cache_lock(crc_cache_mutex);
+        file_crcs.erase(filename);
+    }
     return status.error_code();
 }
 

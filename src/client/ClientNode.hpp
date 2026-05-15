@@ -5,6 +5,7 @@
 #include <map>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <limits.h>
 #include <functional>
 
@@ -42,6 +43,10 @@ private:
 
     // Enforces file sync between inotify and callback threads
     std::mutex server_lock;
+
+    // Last-known CRC per file; lets Store short-circuit after an async-driven Fetch.
+    std::unordered_map<std::string, std::uint32_t> file_crcs;
+    std::mutex crc_cache_mutex;
 
     // Prepend the mount path to the filename
     std::string WrapPath(const std::string& filepath);
