@@ -111,14 +111,15 @@ void Client::InotifyWatcher(unsigned event_flags, FileDescriptor inotify_descrip
         /// a queue workload approach. Inotify and HandleCallback can both add to queue
         /// and consumer can get execute the gRPC services. Eliminates file data race issue
         /// if we only have one consumer
-        client_node.Synchronized([&] {
+        {
+            auto lock = client_node.Synchronized();
             while (event_index < bytes_read) {
                 inotify_event* event = reinterpret_cast<inotify_event*>(&events_buffer[event_index]);
                 // Verify event time and filename
                 if ((event_flags & event->mask) && event->name[0] != '.') {
                     if (event->mask & IN_CREATE || event->mask & IN_MODIFY) {
                         client_node.Store(event->name);
-                    } 
+                    }
                     else if (event->mask & IN_DELETE) {
                         client_node.Delete(event->name);
                     }
@@ -128,7 +129,7 @@ void Client::InotifyWatcher(unsigned event_flags, FileDescriptor inotify_descrip
             if (errno == EINTR) {
                 dfs_log(LL_ERROR) << "inotify interrupted";
             }
-        });
+        }
     }
 }
 

@@ -262,9 +262,8 @@ grpc::StatusCode ClientNode::Stat(const std::string& filename) {
     return status.error_code();
 }
 
-void ClientNode::Synchronized(std::function<void()> callback) {
-    std::lock_guard<std::mutex> lock(server_lock);
-    callback();
+std::unique_lock<std::mutex> ClientNode::Synchronized() {
+    return std::unique_lock<std::mutex>(server_lock);
 }
 
 void ClientNode::HandleCallbackList() {

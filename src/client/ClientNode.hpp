@@ -7,7 +7,6 @@
 #include <string>
 #include <unordered_map>
 #include <limits.h>
-#include <functional>
 
 #include <grpcpp/grpcpp.h>
 
@@ -81,8 +80,8 @@ public:
     grpc::StatusCode List(std::map<std::string,int64_t>* file_map = nullptr, bool display = false);
     grpc::StatusCode Stat(const std::string& filename);
 
-    // Acquires server_lock then runs callback; serializes inotify events against the callback loop.
-    void Synchronized(std::function<void()> callback);
+    // Returns an RAII lock on server_lock; serializes inotify events against the callback loop.
+    [[nodiscard]] std::unique_lock<std::mutex> Synchronized();
 
     // Register Async callback with server
     void InitCallbackList();

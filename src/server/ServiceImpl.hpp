@@ -29,6 +29,7 @@ private:
     std::vector<QueueRequest<FileRequestType, FileListResponseType>> queued_tags;
     std::condition_variable updated;
     std::mutex updated_mutex;
+    bool updates_pending = false;
     LockManager lock_manager;
 
 public:

@@ -48,7 +48,9 @@ void DFSServiceImpl::ProcessCallback(ServerContext* context,
 void DFSServiceImpl::ProcessQueuedRequests() {
     while (true) {
         std::unique_lock<std::mutex> lock(updated_mutex);
-        updated.wait(lock);
+        updated.wait(lock, [&]{ return updates_pending; });
+        updates_pending = false;
+        lock.unlock();
 
         {
             std::lock_guard<std::mutex> qlock(queue_mutex);
@@ -93,7 +95,11 @@ Status DFSServiceImpl::StoreFile(ServerContext* context,
     }  // out flushed and closed here
 
     lock_manager.release(filename, clientid);
-    updated.notify_all();
+    {
+        std::lock_guard<std::mutex> lock(updated_mutex);
+        updates_pending = true;
+    }
+    updated.notify_one();
     return Status::OK;
 }
 
@@ -139,7 +145,11 @@ Status DFSServiceImpl::DeleteFile(ServerContext* context,
         return Status(StatusCode::NOT_FOUND, "File not found");
     }
     lock_manager.release(request->filename(), request->clientid());
-    updated.notify_all();
+    {
+        std::lock_guard<std::mutex> lock(updated_mutex);
+        updates_pending = true;
+    }
+    updated.notify_one();
     return Status::OK;
 }
 
